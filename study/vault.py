@@ -403,3 +403,57 @@ def ensure_vault_structure(vault: Path) -> None:
     """Create vault directories and template files if not present."""
     (vault / "topics").mkdir(parents=True, exist_ok=True)
     (vault / "_daily").mkdir(parents=True, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Vault reset helpers
+# ---------------------------------------------------------------------------
+
+def reset_topic(vault: Path, topic: str) -> None:
+    """Overwrite a topic file with a blank template, preserving frontmatter dates."""
+    path = topic_path(vault, topic)
+    today = date.today().isoformat()
+    created = today
+    if path.exists():
+        fm = _parse_frontmatter(path.read_text())
+        created = str(fm.get("created", today))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(TOPIC_TEMPLATE.format(topic=topic, today=today).replace(
+        f"created: {today}", f"created: {created}"
+    ))
+
+
+def reset_all_topics(vault: Path) -> int:
+    """Delete all topic files. Returns count of files removed."""
+    topics_dir = vault / "topics"
+    if not topics_dir.exists():
+        return 0
+    files = list(topics_dir.rglob("*.md"))
+    for f in files:
+        f.unlink()
+    return len(files)
+
+
+def reset_daily_logs(vault: Path) -> int:
+    """Delete all daily log files. Returns count of files removed."""
+    daily_dir = vault / "_daily"
+    if not daily_dir.exists():
+        return 0
+    files = list(daily_dir.glob("*.md"))
+    for f in files:
+        f.unlink()
+    return len(files)
+
+
+def reset_profile(vault: Path) -> None:
+    """Reset _profile.md to the blank template (caller supplies template text)."""
+    p = profile_path(vault)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    # Reset to minimal blank state; the full template is owned by cli.py
+    p.write_text(
+        "# Learner Profile\n\n"
+        "*This file is updated by the model as it learns about you.*\n\n"
+        "## Background\n\n(unknown — will be filled in as we talk)\n\n"
+        "## Learning Preferences\n\n(unknown)\n\n"
+        "## Metacognitive Notes\n\n(unknown)\n"
+    )

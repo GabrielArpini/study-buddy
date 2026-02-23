@@ -79,6 +79,92 @@ def cmd_ls() -> None:
     render_topics(vault)
 
 
+@main.command("reset")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+def cmd_reset(yes: bool) -> None:
+    """Reset vault data (topics, daily logs, profile, or everything)."""
+    cfg = config_mod.load()
+    vault = config_mod.vault_path(cfg)
+
+    if not vault.exists():
+        console.print(f"[yellow]Vault not found at {vault}.[/yellow]")
+        return
+
+    scope = questionary.select(
+        "What do you want to reset?",
+        choices=[
+            questionary.Choice("Everything  (all topics + daily logs + profile)", value="all"),
+            questionary.Choice("All topics", value="topics"),
+            questionary.Choice("One specific topic", value="topic"),
+            questionary.Choice("Daily logs", value="daily"),
+            questionary.Choice("Learner profile", value="profile"),
+        ],
+    ).ask()
+
+    if scope is None:
+        console.print("[yellow]Reset cancelled.[/yellow]")
+        return
+
+    # For single-topic scope, ask which one
+    chosen_topic: str | None = None
+    if scope == "topic":
+        topics = vault_mod.list_topics(vault)
+        if not topics:
+            console.print("[yellow]No topics found in vault.[/yellow]")
+            return
+        chosen_topic = questionary.select(
+            "Which topic?",
+            choices=topics,
+        ).ask()
+        if chosen_topic is None:
+            console.print("[yellow]Reset cancelled.[/yellow]")
+            return
+
+    # Confirmation
+    if not yes:
+        label = {
+            "all": "the entire vault (all topics, daily logs, and profile)",
+            "topics": "all topics",
+            "topic": f"topic '{chosen_topic}'",
+            "daily": "all daily logs",
+            "profile": "the learner profile",
+        }[scope]
+        confirmed = questionary.confirm(
+            f"This will permanently delete {label}. Continue?",
+            default=False,
+        ).ask()
+        if not confirmed:
+            console.print("[yellow]Reset cancelled.[/yellow]")
+            return
+
+    # Execute reset
+    if scope == "all":
+        n_topics = vault_mod.reset_all_topics(vault)
+        n_daily = vault_mod.reset_daily_logs(vault)
+        vault_mod.reset_profile(vault)
+        console.print(
+            f"[green]Reset complete:[/green] {n_topics} topic(s), "
+            f"{n_daily} daily log(s) deleted, profile cleared."
+        )
+
+    elif scope == "topics":
+        n = vault_mod.reset_all_topics(vault)
+        console.print(f"[green]Deleted {n} topic file(s).[/green]")
+
+    elif scope == "topic":
+        assert chosen_topic is not None
+        vault_mod.reset_topic(vault, chosen_topic)
+        console.print(f"[green]Topic '{chosen_topic}' reset to blank template.[/green]")
+
+    elif scope == "daily":
+        n = vault_mod.reset_daily_logs(vault)
+        console.print(f"[green]Deleted {n} daily log(s).[/green]")
+
+    elif scope == "profile":
+        vault_mod.reset_profile(vault)
+        console.print("[green]Learner profile reset.[/green]")
+
+
 @main.command("config")
 def cmd_config() -> None:
     """Interactive configuration wizard."""
