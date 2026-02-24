@@ -190,15 +190,45 @@ last_session: {today}
 ## Session Log
 """
 
+PROJECT_TEMPLATE = """\
+---
+topic: {topic}
+type: project
+created: {today}
+last_session: {today}
+---
+## Goal
 
-def ensure_topic(vault: Path, topic: str) -> Path:
+## Architecture
+
+## Decisions
+
+## Open Questions
+
+## Tensions
+
+## Session Log
+"""
+
+
+def ensure_topic(vault: Path, topic: str, type: str = "concept") -> Path:
     """Create topic note from template if it doesn't exist. Return path."""
     path = topic_path(vault, topic)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         today = date.today().isoformat()
-        path.write_text(TOPIC_TEMPLATE.format(topic=topic, today=today))
+        template = PROJECT_TEMPLATE if type == "project" else TOPIC_TEMPLATE
+        path.write_text(template.format(topic=topic, today=today))
     return path
+
+
+def topic_type(vault: Path, topic: str) -> str:
+    """Return 'project' or 'concept' (default)."""
+    path = topic_path(vault, topic)
+    if not path.exists():
+        return "concept"
+    fm = _parse_frontmatter(path.read_text())
+    return str(fm.get("type", "concept"))
 
 
 def list_topics(vault: Path) -> list[str]:
@@ -280,6 +310,8 @@ def add_concept(vault: Path, topic: str, concept: str, links: list[str]) -> None
     section_content = get_section(content, "Core Concepts")
     lines = [l for l in section_content.splitlines() if l.strip()]
 
+    links = [l for l in links if l.lower() != concept.lower() and l.lower() != topic.lower()]
+
     entry = f"- [[{concept}]]"
     if links:
         linked = ", ".join(f"[[{l}]]" for l in links)
@@ -328,14 +360,189 @@ def link_to_topic(vault: Path, concept: str, from_topic: str, to_topic: str) -> 
         update_section(path, "Core Concepts", "\n".join(lines))
 
 
+def get_synthesis_entry(vault: Path, topic: str, concept: str) -> str | None:
+    """Return the existing synthesis block for concept, or None if not present."""
+    path = topic_path(vault, topic)
+    if not path.exists():
+        return None
+    content = path.read_text()
+    synthesis = get_section(content, "My Synthesis")
+    heading = f"### {concept}"
+    if heading not in synthesis:
+        return None
+    lines = synthesis.splitlines(keepends=True)
+    in_block = False
+    block_lines = []
+    for line in lines:
+        if line.rstrip() == heading:
+            in_block = True
+            continue
+        if in_block:
+            if line.startswith("### "):
+                break
+            block_lines.append(line)
+    return "".join(block_lines).strip() or None
+
+
+def append_synthesis(
+    vault: Path,
+    topic: str,
+    concept: str,
+    learner_text: str,
+    assistant_note: str = "",
+) -> None:
+    """Write a learner explanation to My Synthesis, replacing any existing block for the concept."""
+    path = ensure_topic(vault, topic)
+    block = f"### {concept}\n\n{learner_text.strip()}"
+    if assistant_note.strip():
+        block += f"\n\n> **Note:** {assistant_note.strip()}"
+    block += "\n"
+
+    content = path.read_text()
+    current_synthesis = get_section(content, "My Synthesis")
+    heading = f"### {concept}"
+
+    if heading in current_synthesis:
+        lines = current_synthesis.splitlines(keepends=True)
+        new_lines = []
+        skip = False
+        for line in lines:
+            if line.rstrip() == heading:
+                skip = True
+                new_lines.append(block)
+                continue
+            if skip and line.startswith("### "):
+                skip = False
+            if not skip:
+                new_lines.append(line)
+        new_synthesis = "".join(new_lines).strip()
+    else:
+        new_synthesis = (current_synthesis.rstrip() + "\n\n" + block) if current_synthesis.strip() else block
+
+    update_section(path, "My Synthesis", new_synthesis)
+    _touch_last_session(path)
+
+
 def append_session_log(vault: Path, topic: str, entry: str) -> None:
     path = ensure_topic(vault, topic)
     content = path.read_text()
     section_content = get_section(content, "Session Log")
     today = date.today().isoformat()
-    new_entry = f"### {today}\n{entry}"
-    new_content = (section_content.rstrip() + "\n\n" + new_entry).lstrip()
+    today_header = f"### {today}"
+
+    if today_header in section_content:
+        new_content = section_content.rstrip() + "\n\n" + entry.strip()
+    else:
+        new_entry = f"{today_header}\n{entry.strip()}"
+        new_content = (section_content.rstrip() + "\n\n" + new_entry).lstrip()
+
     update_section(path, "Session Log", new_content)
+
+
+# ---------------------------------------------------------------------------
+# Project vault functions
+# ---------------------------------------------------------------------------
+
+def record_decision(vault: Path, topic: str, component: str, decision: str, rationale: str) -> None:
+    """Append a dated decision entry to the Decisions section."""
+    path = ensure_topic(vault, topic)
+    content = path.read_text()
+    current = get_section(content, "Decisions")
+    today = date.today().isoformat()
+    entry = f"### {today} — {component}\n\n{decision.strip()}"
+    if rationale.strip():
+        entry += f"\n\n**Why:** {rationale.strip()}"
+    entry += "\n"
+    new_body = (current.rstrip() + "\n\n" + entry) if current.strip() else entry
+    update_section(path, "Decisions", new_body)
+    _touch_last_session(path)
+
+
+def update_architecture(vault: Path, topic: str, component: str, description: str) -> None:
+    """Upsert a component description in the Architecture section."""
+    path = ensure_topic(vault, topic)
+    content = path.read_text()
+    current = get_section(content, "Architecture")
+    heading = f"### {component}"
+    block = f"### {component}\n\n{description.strip()}\n"
+    if heading in current:
+        lines = current.splitlines(keepends=True)
+        new_lines = []
+        skip = False
+        for line in lines:
+            if line.rstrip() == heading:
+                skip = True
+                new_lines.append(block)
+                continue
+            if skip and line.startswith("### "):
+                skip = False
+            if not skip:
+                new_lines.append(line)
+        new_arch = "".join(new_lines).strip()
+    else:
+        new_arch = (current.rstrip() + "\n\n" + block) if current.strip() else block
+    update_section(path, "Architecture", new_arch)
+    _touch_last_session(path)
+
+
+def add_open_question(vault: Path, topic: str, question: str) -> None:
+    path = ensure_topic(vault, topic)
+    content = path.read_text()
+    current = get_section(content, "Open Questions")
+    lines = [l for l in current.splitlines() if l.strip()]
+    entry = f"- {question.strip()}"
+    if entry not in lines:
+        lines.append(entry)
+        update_section(path, "Open Questions", "\n".join(lines))
+
+
+def resolve_open_question(vault: Path, topic: str, question: str) -> None:
+    path = topic_path(vault, topic)
+    if not path.exists():
+        return
+    content = path.read_text()
+    current = get_section(content, "Open Questions")
+    lines = [l for l in current.splitlines() if l.strip()]
+    new_lines = [l for l in lines if question.lower() not in l.lower()]
+    update_section(path, "Open Questions", "\n".join(new_lines))
+
+
+def add_tension(vault: Path, topic: str, tension: str) -> None:
+    """Log a detected coherence conflict to the Tensions section."""
+    path = ensure_topic(vault, topic)
+    content = path.read_text()
+    current = get_section(content, "Tensions")
+    today = date.today().isoformat()
+    entry = f"- [{today}] {tension.strip()}"
+    lines = [l for l in current.splitlines() if l.strip()]
+    lines.append(entry)
+    update_section(path, "Tensions", "\n".join(lines))
+    _touch_last_session(path)
+
+
+def resolve_tension(vault: Path, topic: str, tension: str) -> None:
+    path = topic_path(vault, topic)
+    if not path.exists():
+        return
+    content = path.read_text()
+    current = get_section(content, "Tensions")
+    lines = [l for l in current.splitlines() if l.strip()]
+    new_lines = [l for l in lines if tension.lower() not in l.lower()]
+    update_section(path, "Tensions", "\n".join(new_lines))
+
+
+def get_decisions(vault: Path, topic: str) -> str:
+    path = topic_path(vault, topic)
+    if not path.exists():
+        return ""
+    return get_section(path.read_text(), "Decisions")
+
+
+def get_tensions(vault: Path, topic: str) -> str:
+    path = topic_path(vault, topic)
+    if not path.exists():
+        return ""
+    return get_section(path.read_text(), "Tensions")
 
 
 # ---------------------------------------------------------------------------
