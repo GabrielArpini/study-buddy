@@ -20,6 +20,12 @@ dependencies = [
     "gitpython>=3.1",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
 [project.scripts]
 study = "study.cli:main"
 
