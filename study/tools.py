@@ -11,6 +11,19 @@ import study.vault as vault_mod
 # Tool schemas
 # ---------------------------------------------------------------------------
 
+
+def _get_tool(tool_list: list[Tool], name: str) -> Tool:
+    """Return the first Tool with the given name from tool_list.
+
+    Raises KeyError if not found, so construction of derived tool lists
+    fails loudly rather than silently skipping a tool.
+    """
+    for tool in tool_list:
+        if tool.name == name:
+            return tool
+    raise KeyError(f"Tool '{name}' not found in provided list")
+
+
 TOOLS: list[Tool] = [
     Tool(
         name="read_note",
@@ -207,17 +220,94 @@ TOOLS: list[Tool] = [
 
 PROJECT_TOOLS: list[Tool] = [
     Tool(
-        name="update_goal",
+        name="record_moment",
         description=(
-            "Set or update the top-level goal of the project. Call this when the user "
-            "describes what they are trying to build or achieve overall. "
-            "This is NOT a decision — do not use record_decision for goal statements."
+            "Append a narrative entry to the project Timeline. "
+            "Call for every substantive update: what was done, discovered, built, or hit. "
+            "The moment_type is provided as a hint in the user message — use it. "
+            "Breakthrough and blocker entries are also written to their curated sections."
         ),
         parameters={
             "type": "object",
             "properties": {
-                "topic": {"type": "string", "description": "Topic slug"},
-                "goal": {"type": "string", "description": "The project goal in the user's own words"},
+                "topic": {"type": "string"},
+                "moment_type": {
+                    "type": "string",
+                    "enum": ["progress", "breakthrough", "blocker", "struggle"],
+                },
+                "text": {
+                    "type": "string",
+                    "description": "The user's own words describing what happened",
+                },
+            },
+            "required": ["topic", "moment_type", "text"],
+        },
+    ),
+    Tool(
+        name="resolve_blocker",
+        description=(
+            "Mark a previous blocker as resolved. "
+            "Call when the user describes getting past something they were stuck on."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string"},
+                "blocker_text": {
+                    "type": "string",
+                    "description": "Partial text identifying the blocker entry",
+                },
+                "resolution": {
+                    "type": "string",
+                    "description": "How it was resolved, in the user's words",
+                },
+            },
+            "required": ["topic", "blocker_text", "resolution"],
+        },
+    ),
+    Tool(
+        name="add_graph_node",
+        description=(
+            "Add a typed node to the project graph and optionally connect it to existing nodes. "
+            "The tool returns the current node list — use the slugs shown there when setting "
+            "resolves_slug or contributes_to_slug. "
+            "Node types: milestone (something shipped/achieved), uncertainty (soft unknown), "
+            "certainty (explicitly confirmed/tested), blocker (hard stop). "
+            "Edge types: resolves (uncertainty/blocker → certainty), "
+            "contributes (any → milestone)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string"},
+                "node_type": {
+                    "type": "string",
+                    "enum": ["milestone", "uncertainty", "certainty", "blocker"],
+                },
+                "text": {
+                    "type": "string",
+                    "description": "One sentence describing this moment",
+                },
+                "resolves_slug": {
+                    "type": "string",
+                    "description": "Slug of the uncertainty/blocker node this resolves (optional)",
+                },
+                "contributes_to_slug": {
+                    "type": "string",
+                    "description": "Slug of the milestone node this contributes to (optional)",
+                },
+            },
+            "required": ["topic", "node_type", "text"],
+        },
+    ),
+    Tool(
+        name="update_goal",
+        description="Set or update the project's top-level goal. Not a decision.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string"},
+                "goal": {"type": "string"},
             },
             "required": ["topic", "goal"],
         },
@@ -225,219 +315,27 @@ PROJECT_TOOLS: list[Tool] = [
     Tool(
         name="record_decision",
         description=(
-            "Capture a design or architecture decision in the user's own words. "
-            "Call this whenever the user commits to a direction — even tentatively. "
-            "The tool result includes existing decisions so you can detect conflicts."
+            "Capture a concrete mutually-exclusive choice. "
+            "Not for goal statements or general intent."
         ),
         parameters={
             "type": "object",
             "properties": {
-                "topic": {"type": "string", "description": "Topic slug"},
-                "component": {"type": "string", "description": "System component or area this decision applies to"},
-                "decision": {"type": "string", "description": "The decision in the user's own words"},
-                "rationale": {"type": "string", "description": "Why this decision was made (optional)"},
+                "topic": {"type": "string"},
+                "component": {"type": "string"},
+                "decision": {"type": "string"},
+                "rationale": {"type": "string"},
             },
             "required": ["topic", "component", "decision"],
         },
     ),
-    Tool(
-        name="update_architecture",
-        description=(
-            "Upsert the description of a system component. Use this when the user "
-            "describes how a part of their project works or is structured."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "topic": {"type": "string", "description": "Topic slug"},
-                "component": {"type": "string", "description": "Component name"},
-                "description": {"type": "string", "description": "Description of the component"},
-            },
-            "required": ["topic", "component", "description"],
-        },
-    ),
-    Tool(
-        name="add_open_question",
-        description=(
-            "Log an unresolved question about the project. Use when the user raises "
-            "something they haven't decided yet."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "topic": {"type": "string", "description": "Topic slug"},
-                "question": {"type": "string", "description": "The unresolved question"},
-            },
-            "required": ["topic", "question"],
-        },
-    ),
-    Tool(
-        name="resolve_open_question",
-        description="Remove a question from Open Questions once the user answers it.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "topic": {"type": "string", "description": "Topic slug"},
-                "question": {"type": "string", "description": "The question to remove (partial match)"},
-            },
-            "required": ["topic", "question"],
-        },
-    ),
-    Tool(
-        name="add_tension",
-        description=(
-            "Log a detected conflict between the user's current thinking and a "
-            "previous decision. Call this after surfacing the conflict to the user."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "topic": {"type": "string", "description": "Topic slug"},
-                "tension": {"type": "string", "description": "One-sentence description of the conflict"},
-            },
-            "required": ["topic", "tension"],
-        },
-    ),
-    Tool(
-        name="resolve_tension",
-        description="Remove a tension that the user has resolved or reconciled.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "topic": {"type": "string", "description": "Topic slug"},
-                "tension": {"type": "string", "description": "The tension to remove (partial match)"},
-            },
-            "required": ["topic", "tension"],
-        },
-    ),
-    Tool(
-        name="append_session_log",
-        description="Append a dated entry to the Session Log section of a topic note.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "topic": {"type": "string"},
-                "entry": {"type": "string", "description": "Session summary or key points"},
-            },
-            "required": ["topic", "entry"],
-        },
-    ),
-    Tool(
-        name="update_profile",
-        description=(
-            "Overwrite the learner profile (_profile.md) with updated content. "
-            "Use this to record learner preferences, background, or metacognitive notes."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "content": {"type": "string", "description": "Full markdown content for _profile.md"},
-            },
-            "required": ["content"],
-        },
-    ),
-    Tool(
-        name="add_source",
-        description="Add a source reference to the Sources section of a topic note.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "topic": {"type": "string"},
-                "source": {"type": "string", "description": "Source description or URL"},
-            },
-            "required": ["topic", "source"],
-        },
-    ),
-    Tool(
-        name="suggest_subtopic",
-        description=(
-            "Suggest creating a subtopic under the current topic. "
-            "Call this when the user is clearly focusing on a distinct sub-area "
-            "that deserves its own note."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "subtopic": {
-                    "type": "string",
-                    "description": "Suggested subtopic name in kebab-case",
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "One-line reason for suggesting this subtopic",
-                },
-            },
-            "required": ["subtopic", "reason"],
-        },
-    ),
-    Tool(
-        name="link_to_topic",
-        description=(
-            "Record a cross-topic link from this project to a concept topic in the vault. "
-            "Call this when the user references a concept that has its own vault note."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "concept": {"type": "string"},
-                "from_topic": {"type": "string"},
-                "to_topic": {"type": "string"},
-            },
-            "required": ["concept", "from_topic", "to_topic"],
-        },
-    ),
-    Tool(
-        name="read_note",
-        description=(
-            "Read the full vault note for a topic. Use this to check what the user "
-            "already understands about a concept they reference — so you can tailor "
-            "your response to their existing knowledge."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "topic": {"type": "string", "description": "Topic name (kebab-case)"},
-            },
-            "required": ["topic"],
-        },
-    ),
-    Tool(
-        name="list_topics",
-        description="List all topic names in the vault. Use to check if a concept has an existing note before linking.",
-        parameters={"type": "object", "properties": {}, "required": []},
-    ),
+    _get_tool(TOOLS, "add_source"),
+    _get_tool(TOOLS, "append_session_log"),
+    _get_tool(TOOLS, "update_profile"),
+    _get_tool(TOOLS, "read_note"),
+    _get_tool(TOOLS, "list_topics"),
+    _get_tool(TOOLS, "link_to_topic"),
 ]
-
-
-# ---------------------------------------------------------------------------
-# Decision conflict helpers
-# ---------------------------------------------------------------------------
-
-def _parse_decision_blocks(decisions_text: str) -> list[dict]:
-    """Parse the Decisions section into [{component, decision}, ...] dicts."""
-    blocks: list[dict] = []
-    lines = decisions_text.splitlines()
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        if line.startswith("### ") and " — " in line:
-            component = line.split(" — ", 1)[1].strip()
-            # Next non-empty, non-metadata line is the decision text
-            j = i + 1
-            while j < len(lines) and not lines[j].strip():
-                j += 1
-            decision_text = ""
-            if j < len(lines) and not lines[j].startswith(("#", "**Why")):
-                decision_text = lines[j].strip()
-            blocks.append({"component": component, "decision": decision_text})
-        i += 1
-    return blocks
-
-
-def _components_match(a: str, b: str) -> bool:
-    """True if component names are the same or one is a substring of the other."""
-    a, b = a.lower().strip(), b.lower().strip()
-    return a == b or a in b or b in a
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +352,10 @@ class ToolExecutor:
             "understanding_updates": [],   # list of (concept, level)
             "sources_added": 0,
             "subtopics_created": [],       # list of full subtopic names
+            "moments_recorded": 0,         # project mode
+            "breakthroughs": [],           # project mode
+            "blockers_logged": [],         # project mode
+            "graph_nodes_added": 0,        # project mode
         }
 
     def _normalize_topic_arg(self, arguments: dict) -> tuple[dict, str]:
@@ -578,71 +480,48 @@ class ToolExecutor:
     def _tool_update_goal(self, topic: str, goal: str) -> str:
         path = vault_mod.ensure_topic(self.vault, topic)
         vault_mod.update_section(path, "Goal", goal)
-        link_info = self._auto_link_topics(goal, topic)
-        if link_info:
-            return f"Project goal updated.\n\n{link_info}"
         return "Project goal updated."
 
     def _tool_record_decision(self, topic: str, component: str, decision: str, rationale: str = "") -> str:
-        existing = vault_mod.get_decisions(self.vault, topic)
         vault_mod.record_decision(self.vault, topic, component, decision, rationale)
+        return f"Decision recorded: {component} → {decision}."
 
-        if not existing.strip():
-            link_info = self._auto_link_topics(component + " " + decision + " " + rationale, topic)
-            result = f"Recorded: {component} → {decision}. No prior decisions."
-            return result + (f"\n\n{link_info}" if link_info else "")
+    def _tool_record_moment(self, topic: str, moment_type: str, text: str) -> str:
+        """Dispatch record_moment vault op and update session stats."""
+        vault_mod.record_moment(self.vault, topic, moment_type, text)
+        self.stats["moments_recorded"] += 1
+        if moment_type == "breakthrough":
+            self.stats["breakthroughs"].append(text[:60])
+        elif moment_type == "blocker":
+            self.stats["blockers_logged"].append(text[:60])
+        return f"Moment recorded ({moment_type})."
 
-        # Auto-detect same-component conflicts (Python-level, reliable)
-        prior_blocks = _parse_decision_blocks(existing)
-        same_component = [
-            b for b in prior_blocks
-            if _components_match(b["component"], component) and b["decision"]
-        ]
-        if same_component:
-            for prior in same_component:
-                tension = f"{component}: '{prior['decision']}' vs '{decision}'"
-                vault_mod.add_tension(self.vault, topic, tension)
-            prior_str = "; ".join(f"'{b['decision']}'" for b in same_component)
-            link_info = self._auto_link_topics(component + " " + decision + " " + rationale, topic)
-            result = (
-                f"Recorded: {component} → {decision}.\n\n"
-                f"CONFLICT DETECTED AND LOGGED: '{component}' was previously {prior_str}. "
-                f"Tension has been written to the vault. "
-                f"You MUST surface this to the user — quote the old decision and ask if this is a direction change."
-            )
-            return result + (f"\n\n{link_info}" if link_info else "")
+    def _tool_resolve_blocker(self, topic: str, blocker_text: str, resolution: str) -> str:
+        """Dispatch resolve_blocker vault op."""
+        found = vault_mod.resolve_blocker(self.vault, topic, blocker_text, resolution)
+        if found:
+            return f"Blocker resolved: '{blocker_text[:40]}'."
+        return f"No matching blocker found for '{blocker_text[:40]}'."
 
-        # No same-component conflict found — ask model to check cross-component semantics
-        link_info = self._auto_link_topics(component + " " + decision + " " + rationale, topic)
-        result = (
-            f"Recorded: {component} → {decision}.\n\n"
-            f"Prior decisions (check for cross-component conflicts — "
-            f"call add_tension if '{decision}' cannot coexist with any of these):\n{existing}"
+    def _tool_add_graph_node(
+        self,
+        topic: str,
+        node_type: str,
+        text: str,
+        resolves_slug: str = "",
+        contributes_to_slug: str = "",
+    ) -> str:
+        """Dispatch add_graph_node vault op and update stats."""
+        result = vault_mod.add_graph_node(
+            self.vault,
+            topic,
+            node_type,
+            text,
+            resolves_slug=resolves_slug,
+            contributes_to_slug=contributes_to_slug,
         )
-        return result + (f"\n\n{link_info}" if link_info else "")
-
-    def _tool_update_architecture(self, topic: str, component: str, description: str) -> str:
-        vault_mod.update_architecture(self.vault, topic, component, description)
-        link_info = self._auto_link_topics(component + " " + description, topic)
-        if link_info:
-            return f"Architecture updated: '{component}'.\n\n{link_info}"
-        return f"Architecture updated: '{component}'."
-
-    def _tool_add_open_question(self, topic: str, question: str) -> str:
-        vault_mod.add_open_question(self.vault, topic, question)
-        return "Open question logged."
-
-    def _tool_resolve_open_question(self, topic: str, question: str) -> str:
-        vault_mod.resolve_open_question(self.vault, topic, question)
-        return "Open question resolved."
-
-    def _tool_add_tension(self, topic: str, tension: str) -> str:
-        vault_mod.add_tension(self.vault, topic, tension)
-        return "Tension logged."
-
-    def _tool_resolve_tension(self, topic: str, tension: str) -> str:
-        vault_mod.resolve_tension(self.vault, topic, tension)
-        return "Tension resolved."
+        self.stats["graph_nodes_added"] += 1
+        return result
 
     def _tool_suggest_subtopic(self, subtopic: str, reason: str) -> str:
         import questionary
