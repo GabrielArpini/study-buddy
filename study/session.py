@@ -148,8 +148,9 @@ Capture everything in vault entries. Do not guide, evaluate, or teach.
 
 ### Step 2: Acknowledge
 
-One sentence. "Got it." or a brief confirmation of the key thing captured.
+One sentence confirming what was captured. Name the specific thing recorded — not a generic filler phrase.
 No summaries. No opinions. No evaluations.
+If the message was not a project update (greeting, meta-comment, etc.): respond naturally in one sentence, call no tools.
 
 ### Step 3: Optional probe
 
