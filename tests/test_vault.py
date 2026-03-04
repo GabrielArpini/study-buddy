@@ -51,11 +51,14 @@ def test_ensure_topic_concept_has_core_concepts(tmp_vault):
     assert "## Core Concepts" in path.read_text()
 
 
-def test_ensure_topic_project_has_goal_and_decisions(tmp_vault):
+def test_ensure_topic_project_has_new_sections(tmp_vault):
     path = v.ensure_topic(tmp_vault, "my-project", type="project")
     content = path.read_text()
-    assert "## Goal" in content
-    assert "## Decisions" in content
+    for section in ("## Goal", "## Timeline", "## Breakthroughs",
+                    "## Blockers", "## Decisions", "## Sources", "## Session Log"):
+        assert section in content
+    assert "### Nodes" in content
+    assert "### Edges" in content
 
 
 def test_ensure_topic_idempotent(tmp_vault):
@@ -179,27 +182,72 @@ def test_get_decisions_empty_initially(tmp_vault):
     assert v.get_decisions(tmp_vault, "proj").strip() == ""
 
 
-def test_update_architecture_upsert(tmp_vault):
+def test_record_moment_progress_goes_to_timeline_only(tmp_vault):
     v.ensure_topic(tmp_vault, "proj", type="project")
-    v.update_architecture(tmp_vault, "proj", "Cache", "LRU eviction")
-    v.update_architecture(tmp_vault, "proj", "Cache", "FIFO eviction")
+    v.record_moment(tmp_vault, "proj", "progress", "got the tokenizer working")
     content = v.topic_path(tmp_vault, "proj").read_text()
-    arch = v.get_section(content, "Architecture")
-    assert "FIFO" in arch
-    assert "LRU" not in arch
+    assert "got the tokenizer working" in v.get_section(content, "Timeline")
+    assert "[progress]" in v.get_section(content, "Timeline")
+    assert v.get_section(content, "Breakthroughs").strip() == ""
+    assert v.get_section(content, "Blockers").strip() == ""
 
 
-def test_add_and_resolve_open_question(tmp_vault):
+def test_record_moment_breakthrough_populates_both_sections(tmp_vault):
     v.ensure_topic(tmp_vault, "proj", type="project")
-    v.add_open_question(tmp_vault, "proj", "Should we shard by user?")
-    v.resolve_open_question(tmp_vault, "proj", "shard by user")
+    v.record_moment(tmp_vault, "proj", "breakthrough", "attention masking clicked")
     content = v.topic_path(tmp_vault, "proj").read_text()
-    assert "shard by user" not in v.get_section(content, "Open Questions").lower()
+    assert "attention masking clicked" in v.get_section(content, "Timeline")
+    assert "attention masking clicked" in v.get_section(content, "Breakthroughs")
+    assert v.get_section(content, "Blockers").strip() == ""
 
 
-def test_add_and_resolve_tension(tmp_vault):
+def test_record_moment_blocker_populates_both_sections(tmp_vault):
     v.ensure_topic(tmp_vault, "proj", type="project")
-    v.add_tension(tmp_vault, "proj", "stateless vs sessions")
-    assert "stateless" in v.get_tensions(tmp_vault, "proj")
-    v.resolve_tension(tmp_vault, "proj", "stateless vs sessions")
-    assert v.get_tensions(tmp_vault, "proj").strip() == ""
+    v.record_moment(tmp_vault, "proj", "blocker", "stuck on warp divergence")
+    content = v.topic_path(tmp_vault, "proj").read_text()
+    assert "warp divergence" in v.get_section(content, "Timeline")
+    assert "warp divergence" in v.get_section(content, "Blockers")
+    assert v.get_section(content, "Breakthroughs").strip() == ""
+
+
+def test_resolve_blocker_appends_resolution(tmp_vault):
+    v.ensure_topic(tmp_vault, "proj", type="project")
+    v.record_moment(tmp_vault, "proj", "blocker", "stuck on warp divergence in reduction")
+    found = v.resolve_blocker(tmp_vault, "proj", "warp divergence", "reordered mask ops")
+    assert found is True
+    blockers = v.get_section(v.topic_path(tmp_vault, "proj").read_text(), "Blockers")
+    assert "resolved" in blockers.lower()
+    assert "reordered mask ops" in blockers
+
+
+def test_resolve_blocker_returns_false_when_not_found(tmp_vault):
+    v.ensure_topic(tmp_vault, "proj", type="project")
+    assert v.resolve_blocker(tmp_vault, "proj", "nonexistent", "whatever") is False
+
+
+def test_add_graph_node_writes_to_nodes_section(tmp_vault):
+    v.ensure_topic(tmp_vault, "proj", type="project")
+    v.add_graph_node(tmp_vault, "proj", "uncertainty", "not sure if tiling fits in shared memory")
+    nodes = v.get_graph_nodes(tmp_vault, "proj")
+    assert "[uncertainty]" in nodes
+    assert "not sure if tiling" in nodes
+
+
+def test_add_graph_node_with_resolves_writes_edge(tmp_vault):
+    import re as _re
+    v.ensure_topic(tmp_vault, "proj", type="project")
+    v.add_graph_node(tmp_vault, "proj", "uncertainty", "not sure about tiling")
+    nodes = v.get_graph_nodes(tmp_vault, "proj")
+    match = _re.search(r'\[uncertainty\] ([\w-]+):', nodes)
+    assert match is not None
+    uncertainty_slug = match.group(1)
+    v.add_graph_node(tmp_vault, "proj", "certainty", "tiling confirmed works", resolves_slug=uncertainty_slug)
+    edges = v.get_graph_edges(tmp_vault, "proj")
+    assert f"{uncertainty_slug} → resolves" in edges
+
+
+def test_add_graph_node_returns_current_nodes(tmp_vault):
+    v.ensure_topic(tmp_vault, "proj", type="project")
+    result = v.add_graph_node(tmp_vault, "proj", "milestone", "kernel working")
+    assert "Current nodes:" in result
+    assert "kernel working" in result
