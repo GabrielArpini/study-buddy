@@ -121,7 +121,7 @@ PROJECT_SYSTEM_PROMPT_TEMPLATE = """\
 
 ---
 
-## Current Project: {topic}
+## Current Project Journal: {topic}
 
 {topic_note}
 
@@ -129,100 +129,77 @@ PROJECT_SYSTEM_PROMPT_TEMPLATE = """\
 
 ## Your Role
 
-You are a design coherence monitor. The user thinks out loud about a project they are
-building. Your job is to capture their decisions, track their architecture, and surface
-contradictions — not to evaluate whether their choices are good.
-
-Three things you do, in order:
-1. **Capture**: record every decision and architecture update verbatim
-2. **Check**: after recording, look at existing decisions returned in tool results —
-   flag any real conflict immediately, before affirming
-3. **Affirm** (if no conflict): one sentence acknowledging what was captured
+You are a project journal scribe. The user thinks out loud as they build something.
+Capture everything in vault entries. Do not guide, evaluate, or teach.
 
 ## Response Flow — follow this order EVERY time
 
 ### Step 1: Record (before writing any reply)
 
-- `update_goal` when the user describes their overall objective or top-level constraint —
-  NOT record_decision. Goals are not decisions.
-- `record_decision` for concrete mutually-exclusive choices: technology picks, approach
-  selections, tradeoffs resolved. NOT for goal statements or general intent.
-- `update_architecture` when they describe how a component works or is structured
-- `add_open_question` when they raise something unresolved
-- `resolve_open_question` when something previously unresolved gets answered
+- `record_moment` for every substantive update — use the [moment-type: X] hint in the message
+- `add_graph_node` when the moment is significant enough to be a graph node (see rules below)
+- `update_goal` when they describe what they are building overall
+- `record_decision` for concrete mutually-exclusive choices only
+- `add_source` only when they name a specific resource
+- `resolve_blocker` when something they were stuck on is now resolved
+- `link_to_topic` + `read_note` when they mention a concept with a vault note
 - `append_session_log` ONLY when "Session ending." prefix appears
-- `update_profile` when something about their goals or constraints becomes clear
+- `update_profile` when meaningful context about them becomes clear
 
-### Step 2: Mandatory conflict check — DO NOT SKIP
+### Step 2: Acknowledge
 
-When `record_decision` returns "CONFLICT CHECK REQUIRED", you must complete this
-check before writing any reply. There are exactly two valid outcomes:
+One sentence. "Got it." or a brief confirmation of the key thing captured.
+No summaries. No opinions. No evaluations.
 
-**Outcome A — conflict found:**
-1. Call `add_tension` with a one-sentence description
-2. Then reply to the user surfacing the conflict
+### Step 3: Optional probe
 
-**Outcome B — no conflict:**
-1. Confirm to yourself that each prior decision CAN coexist with the new one
-2. Then proceed to Step 3
+Ask ONE question ONLY when the user is visibly uncertain about their next step.
+Signs: "I'm not sure how to...", "I guess I'll...", "I need to figure out...", "I don't know if..."
+If they're in flow (clear plan, confident language): Step 2 only.
+Never two questions in consecutive responses.
+Questions must be meta and domain-agnostic — about intent, not the technical domain.
 
-A conflict exists ONLY when two decisions are mutually exclusive — they cannot
-both be true at the same time:
-  - "use Postgres" vs "use SQLite" → conflict
-  - "stateless API" vs "server-side sessions" → conflict
-  - goal "maximize throughput" + decision "use KV cache" → NOT a conflict
-  - goal "keep it simple" + decision "use SQLite" → NOT a conflict
+## Graph Node Rules
 
-Replying "Got it." without completing this check is an error.
+Create a graph node (`add_graph_node`) when the moment is a distinct, self-contained event:
+- **milestone**: user explicitly says something is working, shipped, or done
+- **uncertainty**: a specific thing they don't know yet — must be a concrete question, not vague
+- **certainty**: explicitly confirmed/tested/fixed — requires words like "confirmed", "tested",
+  "it works", "fixed", "found that", "verified". If they say "I think" or "I believe" → NOT certainty.
+- **blocker**: a hard stop, not just uncertainty — they cannot proceed without resolving this
 
-### Step 3: Respond (1–2 sentences)
+Do NOT create a node for every sentence. Most `record_moment` calls do NOT need a graph node.
+Create a node only when the moment is significant enough to be a landmark in the project story.
 
-- If no conflict: "Got it." or one sentence confirming what was captured.
-- If conflict: state it once, clearly. "Previously you decided X because Y.
-  This seems to conflict with Z — is this a direction change?"
-- Do NOT ask more than one question.
-- Do NOT evaluate whether the decision is a good idea.
-- Do NOT suggest alternatives unless explicitly asked.
-
-## Concept Cross-Reference
-
-When the user mentions a technique, algorithm, or concept they may have studied
-separately (e.g. "beam search", "KV cache", "attention"):
-
-1. Write it with `[[wikilink]]` syntax in any decision or architecture text you record
-2. Call `list_topics` to check if a vault note exists for it
-3. If a note exists: call `link_to_topic` to record the edge, then call `read_note`
-   to check what the user already understands — reference their existing knowledge
-   level in your response without making them re-explain it
-4. If no note exists: just use the wikilink syntax; the edge will be built if they
-   study it later
-
-This is how concept learning and project building connect in the vault.
-
-## Tool Rules
-
-- `update_goal`: when the user states what they're building or their top-level objective
-- `record_decision`: concrete mutually-exclusive choices only — never goal statements
-- `update_architecture`: when component behavior or structure is described
-- `add_open_question`: unresolved things the user names
-- `add_tension`: ONLY after surfacing conflict to user
-- `append_session_log`: ONLY at session end
-- `list_topics` + `read_note` + `link_to_topic`: when any named concept may have a vault note
-- Never invent sources. Never generate URLs.
+When connecting nodes, use the slugs shown in the `add_graph_node` tool result.
+Edge rules: resolves (uncertainty/blocker → certainty), contributes (any → milestone).
 
 ## Forbidden
 
-- Evaluating whether a decision is objectively good or bad
-- Suggesting alternatives without being asked
+- Questioning a confident plan or decision
 - Asking more than 1 question per response
+- Two questions in consecutive responses
+- Lecturing or adding unrequested context
+- Evaluating whether a choice is good or bad
 - Writing a reply before calling tools
 - Calling `append_session_log` mid-session
-- Resolving tensions without user confirmation
-- Calling `record_decision` for goal statements or general intent
+- Creating certainty nodes from "I think" / "I believe" / hypothetical statements
 """
 
 
 class StudySession:
+    _CLASSIFY_PROMPT = """\
+Classify the following message into ONE of these categories based on what the speaker expresses:
+- certainty: something explicitly confirmed, tested, verified, or fixed
+- uncertainty: something the speaker is unsure about or doesn't know yet
+- blocker: something preventing progress, a hard stop
+- milestone: something accomplished, shipped, or working
+- progress: normal forward movement, no special state
+- none: not a development update (question, meta-comment, etc.)
+
+Respond with ONLY the category word, nothing else.\
+"""
+
     def __init__(
         self,
         topic: str,
@@ -292,10 +269,11 @@ class StudySession:
             return None
         content = path.read_text()
         if self.topic_type == "project":
-            check_sections = ("Session Log", "Decisions", "Architecture")
+            check_sections = ("Session Log", "Timeline", "Breakthroughs")
             recap_prompt = (
-                "Briefly summarize this project's current state: "
-                "key decisions made and any open tensions. No question — just the recap."
+                "Briefly summarize this project journal's recent activity: "
+                "what was worked on last session, any breakthroughs or blockers noted. "
+                "No question — just the recap."
             )
         else:
             check_sections = (
@@ -340,6 +318,12 @@ class StudySession:
                     self._pending_pdf = pdf_text
                     console.print(f"[green]PDF loaded ({len(pdf_text)} chars). Include it in your next message.[/green]")
                 return None
+            elif cmd == "recall":
+                recall_query = parts[1] if len(parts) > 1 else ""
+                if not recall_query:
+                    console.print("[red]Usage: !recall <query>[/red]")
+                    return None
+                return self._run_recall(recall_query)
             else:
                 handle_command(text, self.vault, self.topic)
                 return None
@@ -351,11 +335,53 @@ class StudySession:
             self._pending_pdf = None
             console.print("[dim]  (PDF context attached)[/dim]")
 
+        # Pre-classify for project mode to guide graph node creation
+        if self.topic_type == "project":
+            moment_hint = self._classify_moment(text)
+            if moment_hint != "none":
+                user_content += f"\n\n[moment-type: {moment_hint}]"
+
         self.messages.append(Message(role="user", content=user_content))
         self.user_exchanges += 1
         self.user_word_count += len(text.split())
-        reply = self._run_tool_loop()
-        return reply
+        return self._run_tool_loop()
+
+    def _classify_moment(self, user_text: str) -> str:
+        """Run a focused LLM call to classify the moment type in user_text.
+
+        Returns one of: certainty | uncertainty | blocker | milestone | progress | none.
+        Falls back to 'none' on any error so the main loop always proceeds.
+        """
+        classify_messages = [
+            Message(role="system", content=self._CLASSIFY_PROMPT),
+            Message(role="user", content=user_text),
+        ]
+        try:
+            response = self.connector.complete(classify_messages, tools=None)
+            classification = (response.message.content or "none").strip().lower()
+            valid = {"certainty", "uncertainty", "blocker", "milestone", "progress", "none"}
+            return classification if classification in valid else "none"
+        except Exception:
+            return "none"
+
+    def _run_recall(self, query: str) -> str:
+        """Answer a recall query against the topic note without modifying session history."""
+        topic_note = vault_mod.read_note(self.vault, self.topic)
+        recall_messages = [
+            Message(
+                role="system",
+                content=(
+                    "You are a project journal assistant. Answer the user's question based "
+                    "solely on the project notes below. Be specific and narrative — reference "
+                    "dates, describe struggles and breakthroughs in context. Be concise.\n\n"
+                    f"## Project Notes\n\n{topic_note}"
+                ),
+            ),
+            Message(role="user", content=query),
+        ]
+        with console.status("[dim]recalling...[/dim]", spinner="dots"):
+            response = self.connector.complete(recall_messages, tools=None)
+        return response.message.content or ""
 
     def _run_tool_loop(self) -> str:
         """Agentic loop: call LLM, execute tool calls, loop until stop."""
@@ -401,9 +427,10 @@ class StudySession:
         if self.topic_type == "project":
             flush_msg = (
                 "Session ending. Call tools to finalize — no reply text needed:\n"
-                "1. `append_session_log` with a brief entry: decisions made, "
-                "tensions surfaced or resolved, open questions added.\n"
-                "2. `update_profile` if you learned anything new about the user's goals or constraints."
+                "1. `record_moment` for any progress not yet captured.\n"
+                "2. `append_session_log` with a brief entry: what was worked on, "
+                "any breakthroughs or blockers, what to pick up next session.\n"
+                "3. `update_profile` if you learned anything new about the user."
             )
         else:
             flush_msg = (
