@@ -199,13 +199,21 @@ last_session: {today}
 ---
 ## Goal
 
-## Architecture
+## Timeline
+
+## Breakthroughs
+
+## Blockers
 
 ## Decisions
 
-## Open Questions
+## Sources
 
-## Tensions
+## Graph
+
+### Nodes
+
+### Edges
 
 ## Session Log
 """
@@ -458,79 +466,6 @@ def record_decision(vault: Path, topic: str, component: str, decision: str, rati
     _touch_last_session(path)
 
 
-def update_architecture(vault: Path, topic: str, component: str, description: str) -> None:
-    """Upsert a component description in the Architecture section."""
-    path = ensure_topic(vault, topic)
-    content = path.read_text()
-    current = get_section(content, "Architecture")
-    heading = f"### {component}"
-    block = f"### {component}\n\n{description.strip()}\n"
-    if heading in current:
-        lines = current.splitlines(keepends=True)
-        new_lines = []
-        skip = False
-        for line in lines:
-            if line.rstrip() == heading:
-                skip = True
-                new_lines.append(block)
-                continue
-            if skip and line.startswith("### "):
-                skip = False
-            if not skip:
-                new_lines.append(line)
-        new_arch = "".join(new_lines).strip()
-    else:
-        new_arch = (current.rstrip() + "\n\n" + block) if current.strip() else block
-    update_section(path, "Architecture", new_arch)
-    _touch_last_session(path)
-
-
-def add_open_question(vault: Path, topic: str, question: str) -> None:
-    path = ensure_topic(vault, topic)
-    content = path.read_text()
-    current = get_section(content, "Open Questions")
-    lines = [l for l in current.splitlines() if l.strip()]
-    entry = f"- {question.strip()}"
-    if entry not in lines:
-        lines.append(entry)
-        update_section(path, "Open Questions", "\n".join(lines))
-
-
-def resolve_open_question(vault: Path, topic: str, question: str) -> None:
-    path = topic_path(vault, topic)
-    if not path.exists():
-        return
-    content = path.read_text()
-    current = get_section(content, "Open Questions")
-    lines = [l for l in current.splitlines() if l.strip()]
-    new_lines = [l for l in lines if question.lower() not in l.lower()]
-    update_section(path, "Open Questions", "\n".join(new_lines))
-
-
-def add_tension(vault: Path, topic: str, tension: str) -> None:
-    """Log a detected coherence conflict to the Tensions section."""
-    path = ensure_topic(vault, topic)
-    content = path.read_text()
-    current = get_section(content, "Tensions")
-    today = date.today().isoformat()
-    entry = f"- [{today}] {tension.strip()}"
-    lines = [l for l in current.splitlines() if l.strip()]
-    lines.append(entry)
-    update_section(path, "Tensions", "\n".join(lines))
-    _touch_last_session(path)
-
-
-def resolve_tension(vault: Path, topic: str, tension: str) -> None:
-    path = topic_path(vault, topic)
-    if not path.exists():
-        return
-    content = path.read_text()
-    current = get_section(content, "Tensions")
-    lines = [l for l in current.splitlines() if l.strip()]
-    new_lines = [l for l in lines if tension.lower() not in l.lower()]
-    update_section(path, "Tensions", "\n".join(new_lines))
-
-
 def get_decisions(vault: Path, topic: str) -> str:
     path = topic_path(vault, topic)
     if not path.exists():
@@ -538,11 +473,149 @@ def get_decisions(vault: Path, topic: str) -> str:
     return get_section(path.read_text(), "Decisions")
 
 
-def get_tensions(vault: Path, topic: str) -> str:
+MOMENT_TYPES: tuple[str, ...] = ("progress", "breakthrough", "blocker", "struggle")
+
+
+def record_moment(
+    vault: Path,
+    topic: str,
+    moment_type: str,
+    text: str,
+) -> None:
+    """Append a timestamped narrative entry to the Timeline section.
+
+    For 'breakthrough' moments, also appends a bullet to Breakthroughs.
+    For 'blocker' moments, also appends a bullet to Blockers.
+    """
+    path = ensure_topic(vault, topic)
+    today = date.today().isoformat()
+
+    current_timeline = get_section(path.read_text(), "Timeline")
+    tag = f"[{moment_type}]"
+    new_entry = f"### {today} {tag}\n\n{text.strip()}\n"
+    new_timeline = (current_timeline.rstrip() + "\n\n" + new_entry) if current_timeline.strip() else new_entry
+    update_section(path, "Timeline", new_timeline)
+
+    if moment_type == "breakthrough":
+        current_breakthroughs = get_section(path.read_text(), "Breakthroughs")
+        bullet_lines = [ln for ln in current_breakthroughs.splitlines() if ln.strip()]
+        bullet_lines.append(f"- [{today}] {text.strip()}")
+        update_section(path, "Breakthroughs", "\n".join(bullet_lines))
+
+    elif moment_type == "blocker":
+        current_blockers = get_section(path.read_text(), "Blockers")
+        bullet_lines = [ln for ln in current_blockers.splitlines() if ln.strip()]
+        bullet_lines.append(f"- [{today}] {text.strip()}")
+        update_section(path, "Blockers", "\n".join(bullet_lines))
+
+    _touch_last_session(path)
+
+
+def resolve_blocker(
+    vault: Path,
+    topic: str,
+    blocker_text: str,
+    resolution: str,
+) -> bool:
+    """Append a resolution note to the first Blockers entry matching blocker_text.
+
+    Uses case-insensitive partial match. Returns True if found and updated.
+    """
+    path = topic_path(vault, topic)
+    if not path.exists():
+        return False
+    content = path.read_text()
+    current_blockers = get_section(content, "Blockers")
+    lines = current_blockers.splitlines()
+    updated = False
+    new_lines: list[str] = []
+    for line in lines:
+        if not updated and blocker_text.lower() in line.lower():
+            new_lines.append(line + f" → **resolved:** {resolution.strip()}")
+            updated = True
+        else:
+            new_lines.append(line)
+    if updated:
+        update_section(path, "Blockers", "\n".join(new_lines))
+        _touch_last_session(path)
+    return updated
+
+
+def _slugify_node(text: str) -> str:
+    """Generate a short kebab-case slug from the first 6 words of text."""
+    words = re.sub(r"[^a-z0-9 ]", "", text.lower()).split()
+    return "-".join(words[:6]) or "node"
+
+
+GRAPH_NODE_TYPES: tuple[str, ...] = ("milestone", "uncertainty", "certainty", "blocker")
+GRAPH_EDGE_TYPES: tuple[str, ...] = ("resolves", "contributes")
+
+
+def add_graph_node(
+    vault: Path,
+    topic: str,
+    node_type: str,
+    text: str,
+    resolves_slug: str = "",
+    contributes_to_slug: str = "",
+) -> str:
+    """Add a typed node to the Graph section and optionally create edges.
+
+    Returns the new node's slug and the full current Nodes list as context.
+    """
+    path = ensure_topic(vault, topic)
+    today = date.today().isoformat()
+    slug = _slugify_node(text)
+
+    current_nodes = get_section(path.read_text(), "Graph/Nodes")
+    node_line = f'- [{node_type}] {slug}: "{text.strip()}" ({today})'
+    node_lines = [ln for ln in current_nodes.splitlines() if ln.strip()]
+    if node_line not in node_lines:
+        node_lines.append(node_line)
+    update_section(path, "Graph/Nodes", "\n".join(node_lines))
+
+    edges_written: list[str] = []
+    if resolves_slug:
+        _add_graph_edge(path, resolves_slug, "resolves", slug)
+        edges_written.append(f"{resolves_slug} → resolves → {slug}")
+    if contributes_to_slug:
+        _add_graph_edge(path, slug, "contributes", contributes_to_slug)
+        edges_written.append(f"{slug} → contributes → {contributes_to_slug}")
+
+    _touch_last_session(path)
+
+    current_nodes_updated = get_section(path.read_text(), "Graph/Nodes")
+    return (
+        f"Node '{slug}' added ({node_type})."
+        + (f" Edges: {'; '.join(edges_written)}." if edges_written else "")
+        + f"\n\nCurrent nodes:\n{current_nodes_updated}"
+    )
+
+
+def _add_graph_edge(path: Path, from_slug: str, edge_type: str, to_slug: str) -> None:
+    """Append an edge line to Graph/Edges if not already present."""
+    current_edges = get_section(path.read_text(), "Graph/Edges")
+    edge_line = f"- {from_slug} → {edge_type} → {to_slug}"
+    edge_lines = [ln for ln in current_edges.splitlines() if ln.strip()]
+    if edge_line not in edge_lines:
+        edge_lines.append(edge_line)
+    update_section(path, "Graph/Edges", "\n".join(edge_lines))
+
+
+def get_graph_nodes(vault: Path, topic: str) -> str:
+    """Return the raw Graph/Nodes section text for a topic."""
     path = topic_path(vault, topic)
     if not path.exists():
         return ""
-    return get_section(path.read_text(), "Tensions")
+    return get_section(path.read_text(), "Graph/Nodes")
+
+
+def get_graph_edges(vault: Path, topic: str) -> str:
+    """Return the raw Graph/Edges section text for a topic."""
+    path = topic_path(vault, topic)
+    if not path.exists():
+        return ""
+    return get_section(path.read_text(), "Graph/Edges")
 
 
 # ---------------------------------------------------------------------------
