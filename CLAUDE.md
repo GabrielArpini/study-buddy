@@ -1,6 +1,6 @@
 # study-buddy — CLAUDE.md
 
-Socratic CLI study companion. The LLM acts as a tutor that asks questions, never lectures. It reads/writes a local markdown vault to track learner understanding over time.
+Socratic CLI study companion. Two modes: **concept** (Socratic tutor — asks questions, never lectures) and **project** (dev journal scribe — captures narrative entries and maintains a typed moment graph while the user thinks out loud while building).
 
 ## Stack
 
@@ -21,7 +21,7 @@ study/
   session.py      # StudySession — system prompt assembly, agentic tool loop
   repl.py         # prompt_toolkit REPL
   vault.py        # All vault read/write operations
-  tools.py        # Tool schemas + ToolExecutor (dispatches LLM tool calls)
+  tools.py        # Tool schemas (TOOLS, PROJECT_TOOLS) + ToolExecutor
   renderer.py     # Rich display for !commands + PDF extraction
   git_ops.py      # Vault git init + session commit
   models.py       # Pydantic models: Message, Tool, ToolCall, Response
@@ -32,19 +32,44 @@ study/
     ollama.py     # Ollama connector
 ```
 
+## Topic modes
+
+| Mode | Purpose | LLM role |
+|---|---|---|
+| **concept** | Study a subject — recall, explanation, synthesis | Socratic tutor: ask, never lecture |
+| **project** | Build something — journal progress as it happens | Scribe: capture, never evaluate |
+
+Topic type is read from YAML frontmatter (`type: project`); absent = concept.
+
+### Concept mode vault sections
+`Sources | Core Concepts | Understanding (Solid/Shaky/Not Yet Engaged) | My Synthesis | Session Log`
+
+### Project mode vault sections
+`Goal | Timeline | Breakthroughs | Blockers | Decisions | Sources | Graph (Nodes/Edges) | Session Log`
+
+- **Timeline** — every `record_moment` call writes a dated `### YYYY-MM-DD [type]` entry here
+- **Breakthroughs / Blockers** — curated bullet lists auto-populated from matching moment types
+- **Graph** — typed nodes (`milestone | uncertainty | certainty | blocker`) with directed edges (`resolves`, `contributes`); rendered by `!graph` and queryable by `!recall`
+- **Decisions** — explicit mutually-exclusive choices, via `record_decision()`
+
 ## Request flow
 
 ```
 user types + presses Enter
   → repl.py: run_repl()
     → session.py: StudySession.send()
-      → if "!" prefix: renderer.py: handle_command() [local, no LLM]
-      → else: _run_tool_loop()
-        → connector.complete(messages, tools)
-        → if tool_calls: tools.py: ToolExecutor.execute()
-          → vault.py: mutate vault
-        → loop up to 10 rounds until stop_reason == "stop"
-        → return final assistant text
+      → if "!recall <query>": session.py: _run_recall() [fresh single-turn, no history mutation]
+      → if other "!" prefix: renderer.py: handle_command() [local, no LLM]
+      → else:
+          (project mode only) session.py: _classify_moment()
+            → single focused LLM call → hint word (progress/breakthrough/blocker/...)
+            → hint appended to user message as "[moment-type: X]"
+          _run_tool_loop()
+            → connector.complete(messages, tools)
+            → if tool_calls: tools.py: ToolExecutor.execute()
+              → vault.py: mutate vault
+            → loop up to 10 rounds until stop_reason == "stop"
+            → return final assistant text
   → repl.py: print reply
 ```
 
@@ -54,14 +79,14 @@ user types + presses Enter
 ~/Documents/study-vault/   (configurable)
   _framework.md            system prompt instructions for the LLM
   _profile.md              learner profile (LLM-maintained)
-  topics/<topic>.md        one file per topic, fixed sections:
-                             Sources | Core Concepts | Understanding
-                             (Solid/Shaky/Not Yet Engaged) |
-                             My Synthesis | Session Log
+  topics/<topic>.md        concept: Sources | Core Concepts | Understanding
+                             (Solid/Shaky/Not Yet Engaged) | My Synthesis | Session Log
+                           project: Goal | Timeline | Breakthroughs | Blockers |
+                             Decisions | Sources | Graph (Nodes/Edges) | Session Log
   _daily/YYYY-MM-DD.md     daily activity log
 ```
 
-Topic notes use YAML frontmatter (`topic`, `created`, `last_session`). All vault mutations go through `vault.py` — never write topic files directly.
+Topic notes use YAML frontmatter (`topic`, `created`, `last_session`, optionally `type: project`). All vault mutations go through `vault.py` — never write topic files directly.
 
 ## Adding a new LLM connector
 
@@ -71,7 +96,14 @@ Topic notes use YAML frontmatter (`topic`, `created`, `last_session`). All vault
 
 ## Adding a new tool
 
+**Concept mode:**
 1. Add a `Tool(...)` entry to `TOOLS` in `tools.py`
+2. Add a `_tool_<name>` method on `ToolExecutor`
+3. Add the underlying vault operation to `vault.py` if needed
+
+**Project mode:**
+1. Add a `Tool(...)` entry to `PROJECT_TOOLS` in `tools.py`
+   — use `_get_tool(TOOLS, "name")` to reuse shared tool schemas instead of duplicating
 2. Add a `_tool_<name>` method on `ToolExecutor`
 3. Add the underlying vault operation to `vault.py` if needed
 
@@ -100,8 +132,9 @@ uv run study config           # reconfigure
 
 # Inside the REPL
 !status                       # understanding table for current topic
-!graph                        # concept graph tree
+!graph                        # concept graph tree (or typed project graph in project mode)
 !timeline                     # last 30 daily logs
 !topics                       # all topics + last session dates
 !add path/to/file.pdf         # inject PDF text into next message
+!recall <query>               # narrative recall query against current project journal
 ```
