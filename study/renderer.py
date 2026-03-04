@@ -29,7 +29,10 @@ def handle_command(command: str, vault: Path, topic: str) -> bool:
     elif cmd == "timeline":
         render_timeline(vault)
     elif cmd == "graph":
-        render_graph(vault, topic)
+        if vault_mod.topic_type(vault, topic) == "project":
+            render_project_graph(vault, topic)
+        else:
+            render_graph(vault, topic)
     elif cmd == "topics":
         render_topics(vault)
     elif cmd == "help":
@@ -158,12 +161,13 @@ def render_topics(vault: Path) -> None:
 def render_help() -> None:
     """Show a panel listing all REPL commands."""
     lines = [
-        "[bold]!status[/bold]        understanding table for current topic",
-        "[bold]!graph[/bold]         concept graph tree",
-        "[bold]!timeline[/bold]      last 30 daily logs",
-        "[bold]!topics[/bold]        all topics + last session dates",
-        "[bold]!add <path>[/bold]    inject PDF text into next message",
-        "[bold]!help[/bold]          show this help",
+        "[bold]!status[/bold]              understanding table for current topic",
+        "[bold]!graph[/bold]               concept graph tree (or project graph in project mode)",
+        "[bold]!timeline[/bold]            last 30 daily logs",
+        "[bold]!topics[/bold]              all topics + last session dates",
+        "[bold]!add <path>[/bold]          inject PDF text into next message",
+        "[bold]!recall <query>[/bold]      ask a narrative question about this project",
+        "[bold]!help[/bold]                show this help",
         "",
         "[bold]/exit[/bold]          end session",
         "[bold]Shift+Enter[/bold]    newline without submitting",
@@ -237,12 +241,78 @@ def render_session_summary(summary: dict) -> None:
     for sub in subtopics_created:
         vault_lines.append(f"  [cyan]◆[/cyan] subtopic: {sub}")
 
+    moments_recorded = stats.get("moments_recorded", 0)
+    if moments_recorded:
+        vault_lines.append(f"  [cyan]◎[/cyan] {moments_recorded} moment(s) captured")
+
+    breakthroughs = stats.get("breakthroughs", [])
+    if breakthroughs:
+        vault_lines.append(f"  [green]★[/green] {len(breakthroughs)} breakthrough(s)")
+
+    blockers_logged = stats.get("blockers_logged", [])
+    if blockers_logged:
+        vault_lines.append(f"  [yellow]⚠[/yellow] {len(blockers_logged)} blocker(s) logged")
+
+    graph_nodes_added = stats.get("graph_nodes_added", 0)
+    if graph_nodes_added:
+        vault_lines.append(f"  [magenta]◈[/magenta] {graph_nodes_added} graph node(s)")
+
     if vault_lines:
         lines.append("")
         lines.append("vault")
         lines.extend(vault_lines)
 
     console.print(Panel("\n".join(lines), title="[bold]session summary[/bold]", border_style="dim"))
+
+
+def render_project_graph(vault: Path, topic: str) -> None:
+    """Render the typed project graph as a Rich Tree."""
+    nodes_text = vault_mod.get_graph_nodes(vault, topic)
+    edges_text = vault_mod.get_graph_edges(vault, topic)
+
+    if not nodes_text.strip():
+        console.print("[yellow]No graph nodes yet.[/yellow]")
+        return
+
+    node_pattern = re.compile(r'- \[(\w+)\] ([\w-]+): "([^"]+)" \(([^)]+)\)')
+    nodes = [
+        {"type": m.group(1), "slug": m.group(2), "text": m.group(3), "date": m.group(4)}
+        for m in node_pattern.finditer(nodes_text)
+    ]
+
+    edge_pattern = re.compile(r'- ([\w-]+) → (\w+) → ([\w-]+)')
+    edges = [
+        {"from": m.group(1), "edge": m.group(2), "to": m.group(3)}
+        for m in edge_pattern.finditer(edges_text)
+    ]
+
+    outgoing: dict[str, list[str]] = {}
+    for edge in edges:
+        outgoing.setdefault(edge["from"], []).append(
+            f"[dim]→ {edge['edge']} →[/dim] {edge['to']}"
+        )
+
+    type_colors = {
+        "milestone": "bold green",
+        "certainty": "green",
+        "uncertainty": "yellow",
+        "blocker": "red",
+    }
+    tree = Tree(f"[bold cyan]{escape(topic)} — graph[/bold cyan]")
+    for node_type in ("milestone", "certainty", "uncertainty", "blocker"):
+        type_nodes = [n for n in nodes if n["type"] == node_type]
+        if not type_nodes:
+            continue
+        color = type_colors.get(node_type, "white")
+        branch = tree.add(f"[{color}]{node_type}[/{color}]")
+        for node in type_nodes:
+            node_branch = branch.add(
+                f"[dim]{node['date']}[/dim]  [{color}]{escape(node['slug'])}[/{color}]: {escape(node['text'])}"
+            )
+            for edge_label in outgoing.get(node["slug"], []):
+                node_branch.add(edge_label)
+
+    console.print(Panel(tree, title="Project Graph", border_style="cyan"))
 
 
 def extract_pdf_text(pdf_path: str) -> str:
