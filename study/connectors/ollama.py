@@ -27,6 +27,7 @@ class OllamaConnector(LLMConnector):
         if tools:
             kwargs["tools"] = [_tool_to_ollama(t) for t in tools]
 
+        kwargs["keep_alive"] = -1
         response = ollama.chat(**kwargs)
         ollama_msg = response.message
 
@@ -55,7 +56,7 @@ class OllamaConnector(LLMConnector):
     def stream(self, messages: list[Message], tools: list[Tool] | None = None) -> Iterator[str]:
         """Stream text. Do not call with tools — Ollama doesn't support streaming + tools."""
         msg_dicts = self._messages_to_ollama(messages)
-        for chunk in ollama.chat(model=self.model, messages=msg_dicts, stream=True):
+        for chunk in ollama.chat(model=self.model, messages=msg_dicts, stream=True, keep_alive=-1):
             text = chunk.message.content
             if text:
                 yield text
