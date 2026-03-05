@@ -10,7 +10,7 @@ CONFIG_FILE = CONFIG_DIR / "config.toml"
 DEFAULTS: dict[str, Any] = {
     "llm": {
         "connector": "ollama",
-        "model": "qwen2.5:7b",
+        "model": "qwen3.5:4b",
     },
     "vault": {
         "path": "~/Documents/study-vault",
@@ -55,6 +55,8 @@ def _dict_to_toml(d: dict[str, Any], prefix: str = "") -> list[str]:
     sections: list[tuple[str, dict]] = []
 
     for k, v in d.items():
+        if v is None:
+            continue
         if isinstance(v, dict):
             sections.append((k, v))
         else:
