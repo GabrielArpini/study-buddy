@@ -85,7 +85,7 @@ def run_repl(session: StudySession, model_label: str) -> None:
 
 
 def _do_exit(session: StudySession) -> None:
-    console.print("\n[dim]Ending session...[/dim]")
+    console.print("\n[dim]wrapping up vault and finishing...[/dim]")
     try:
         session.end_session()
     except Exception as e:

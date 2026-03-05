@@ -61,9 +61,6 @@ user types + presses Enter
       → if "!recall <query>": session.py: _run_recall() [fresh single-turn, no history mutation]
       → if other "!" prefix: renderer.py: handle_command() [local, no LLM]
       → else:
-          (project mode only) session.py: _classify_moment()
-            → single focused LLM call → hint word (progress/breakthrough/blocker/...)
-            → hint appended to user message as "[moment-type: X]"
           _run_tool_loop()
             → connector.complete(messages, tools)
             → if tool_calls: tools.py: ToolExecutor.execute()
@@ -114,7 +111,7 @@ Stored at `~/.study/config.toml`. Defaults:
 ```toml
 [llm]
 connector = "ollama"
-model = "qwen2.5:7b"
+model = "qwen3.5:4b"
 
 [vault]
 path = "~/Documents/study-vault"

@@ -224,7 +224,6 @@ PROJECT_TOOLS: list[Tool] = [
         description=(
             "Append a narrative entry to the project Timeline. "
             "Call for every substantive update: what was done, discovered, built, or hit. "
-            "The moment_type is provided as a hint in the user message — use it. "
             "Breakthrough and blocker entries are also written to their curated sections."
         ),
         parameters={

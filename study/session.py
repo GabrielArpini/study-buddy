@@ -136,7 +136,7 @@ Capture everything in vault entries. Do not guide, evaluate, or teach.
 
 ### Step 1: Record (before writing any reply)
 
-- `record_moment` for every substantive update — use the [moment-type: X] hint in the message
+- `record_moment` for every substantive update — infer the moment_type (progress/breakthrough/blocker/struggle) from context
 - `add_graph_node` when the moment is significant enough to be a graph node (see rules below)
 - `update_goal` when they describe what they are building overall
 - `record_decision` for concrete mutually-exclusive choices only
@@ -189,18 +189,6 @@ Edge rules: resolves (uncertainty/blocker → certainty), contributes (any → m
 
 
 class StudySession:
-    _CLASSIFY_PROMPT = """\
-Classify the following message into ONE of these categories based on what the speaker expresses:
-- certainty: something explicitly confirmed, tested, verified, or fixed
-- uncertainty: something the speaker is unsure about or doesn't know yet
-- blocker: something preventing progress, a hard stop
-- milestone: something accomplished, shipped, or working
-- progress: normal forward movement, no special state
-- none: not a development update (question, meta-comment, etc.)
-
-Respond with ONLY the category word, nothing else.\
-"""
-
     def __init__(
         self,
         topic: str,
@@ -336,34 +324,10 @@ Respond with ONLY the category word, nothing else.\
             self._pending_pdf = None
             console.print("[dim]  (PDF context attached)[/dim]")
 
-        # Pre-classify for project mode to guide graph node creation
-        if self.topic_type == "project":
-            moment_hint = self._classify_moment(text)
-            if moment_hint != "none":
-                user_content += f"\n\n[moment-type: {moment_hint}]"
-
         self.messages.append(Message(role="user", content=user_content))
         self.user_exchanges += 1
         self.user_word_count += len(text.split())
         return self._run_tool_loop()
-
-    def _classify_moment(self, user_text: str) -> str:
-        """Run a focused LLM call to classify the moment type in user_text.
-
-        Returns one of: certainty | uncertainty | blocker | milestone | progress | none.
-        Falls back to 'none' on any error so the main loop always proceeds.
-        """
-        classify_messages = [
-            Message(role="system", content=self._CLASSIFY_PROMPT),
-            Message(role="user", content=user_text),
-        ]
-        try:
-            response = self.connector.complete(classify_messages, tools=None)
-            classification = (response.message.content or "none").strip().lower()
-            valid = {"certainty", "uncertainty", "blocker", "milestone", "progress", "none"}
-            return classification if classification in valid else "none"
-        except Exception:
-            return "none"
 
     def _run_recall(self, query: str) -> str:
         """Answer a recall query against the topic note without modifying session history."""
@@ -384,11 +348,14 @@ Respond with ONLY the category word, nothing else.\
             response = self.connector.complete(recall_messages, tools=None)
         return response.message.content or ""
 
-    def _run_tool_loop(self) -> str:
+    def _run_tool_loop(self, show_spinner: bool = True) -> str:
         """Agentic loop: call LLM, execute tool calls, loop until stop."""
         last_text = ""
         for _round in range(MAX_TOOL_ROUNDS):
-            with console.status("[dim]thinking...[/dim]", spinner="dots"):
+            if show_spinner:
+                with console.status("[dim]thinking...[/dim]", spinner="dots"):
+                    response = self.connector.complete(self.messages, tools=self.tools)
+            else:
                 response = self.connector.complete(self.messages, tools=self.tools)
             self.messages.append(response.message)
 
@@ -443,8 +410,7 @@ Respond with ONLY the category word, nothing else.\
                 "4. `update_profile` if you learned anything new about the learner."
             )
         self.messages.append(Message(role="user", content=flush_msg))
-        console.print("[dim]wrapping up vault...[/dim]")
-        self._run_tool_loop()
+        self._run_tool_loop(show_spinner=False)
 
         note_path = vault_mod.topic_path(self.vault, self.topic)
         if note_path.exists():
